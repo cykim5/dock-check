@@ -1,0 +1,6 @@
+# AutoDock Vina needs Boost, so pip cannot build it. Use conda:
+#   conda create -n dockcheck -c conda-forge python=3.12 vina=1.2.7 numpy scipy
+rdkit
+meeko>=0.8
+scipy
+pytest

@@ -1,0 +1,72 @@
+{
+  "verdict": {
+    "verdict": "FAIL",
+    "bar": 95.0,
+    "worst_percentile": 13.5678391959799,
+    "reason": "the weakest known binder is at the 13.6th percentile, so a compound that outscores it has shown nothing: 86% of random drugs do too",
+    "size_match_warning": "these known binders fall outside the decoy size window, so their percentiles compare molecules of different sizes and should not be read as a result: UDP (25 heavy atoms), UMP (21 heavy atoms)",
+    "worst_percentile_matched": 30.150753768844222,
+    "size_bias_warning": "score correlates with heavy atom count at rho=-0.67 across 2738 decoys, so the ranking is substantially reporting molecular size"
+  },
+  "result": {
+    "scoring": "vina",
+    "exhaustiveness": 8,
+    "seed": 42,
+    "receptor": "uxs1_holo.pdbqt",
+    "center": [
+      62.3,
+      16.4,
+      34.2
+    ],
+    "size": [
+      28,
+      28,
+      28
+    ],
+    "natives": [
+      {
+        "id": "UDP-glucuronate",
+        "score": -7.938,
+        "heavy": 37,
+        "percentile": 58.29145728643216,
+        "beaten_by": 83
+      },
+      {
+        "id": "UDP-xylose",
+        "score": -7.296,
+        "heavy": 34,
+        "percentile": 30.150753768844222,
+        "beaten_by": 139
+      },
+      {
+        "id": "UDP",
+        "score": -6.96,
+        "heavy": 25,
+        "percentile": 13.5678391959799,
+        "beaten_by": 172
+      },
+      {
+        "id": "UDP-galactose",
+        "score": -7.866,
+        "heavy": 36,
+        "percentile": 54.77386934673367,
+        "beaten_by": 90
+      },
+      {
+        "id": "UMP",
+        "score": -6.984,
+        "heavy": 21,
+        "percentile": 15.075376884422111,
+        "beaten_by": 169
+      }
+    ],
+    "n_decoys": 199,
+    "decoy_median": -7.724,
+    "size_bias": {
+      "rho": -0.67,
+      "p": 1e-30,
+      "n": 2738
+    },
+    "minutes": 78.5
+  }
+}
