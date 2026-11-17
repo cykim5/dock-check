@@ -77,6 +77,37 @@ def heavy_atom_count(sdf_path):
     return sum(1 for l in lines[4:4 + n] if l[31:34].strip() != "H")
 
 
+HYDROGEN_TYPES = ("H", "HD", "HS")
+
+
+def heavy_atom_count_pdbqt(path):
+    """Heavy atoms in a PDBQT, by Vina atom type rather than element.
+
+    The type is the last field on the line. Columns 78 to 79 are the
+    standard position, but files written by different tools drift, so
+    the last field is read first and the fixed columns are the fallback.
+    """
+    n = 0
+    for l in open(path):
+        if l[:6].strip() not in ("ATOM", "HETATM"):
+            continue
+        fields = l.split()
+        t = fields[-1].upper() if len(fields) > 0 else ""
+        if len(t) > 2 or t == "":
+            t = l[77:79].strip().upper()
+        if t in HYDROGEN_TYPES:
+            continue
+        n = n + 1
+    return n
+
+
+def heavy_atoms_of(path):
+    """Heavy atom count from whichever format this file is."""
+    if path.endswith(".pdbqt") == True:
+        return heavy_atom_count_pdbqt(path)
+    return heavy_atom_count(path)
+
+
 def size_window(native_heavy, tolerance=6):
     """The heavy atom window decoys must fall in."""
     return (native_heavy - tolerance, native_heavy + tolerance)

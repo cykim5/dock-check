@@ -146,3 +146,15 @@ def test_matched_subset_percentile_is_reported():
     r["natives"][0]["heavy"] = 21
     v = verdict(r)
     assert v["worst_percentile_matched"] == pytest.approx(50.0)
+
+
+# ------------------------------------- heavy atoms, whatever the format
+def test_heavy_atoms_from_pdbqt_skips_polar_hydrogens(tmp_path):
+    from dockcheck.decoys import heavy_atoms_of
+    p = tmp_path / "x.pdbqt"
+    # exactly the layout Meeko writes
+    p.write_text(
+        "ATOM      1  O   UNL     1      -0.884  -2.540  -0.698  1.00  0.00    -0.185 OA\n"
+        "ATOM      2  C   UNL     1       0.000   0.000   0.000  1.00  0.00     0.100 C \n"
+        "ATOM      3  H   UNL     1       2.000   0.000   0.000  1.00  0.00     0.200 HD\n")
+    assert heavy_atoms_of(str(p)) == 2

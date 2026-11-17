@@ -80,8 +80,7 @@ def cmd_run(a):
                 sys.exit(f"could not prepare {path}: {why}")
         natives.append({"id": os.path.basename(path).rsplit(".", 1)[0],
                         "pdbqt": pdbqt,
-                        "heavy": dk.heavy_atom_count(path)
-                        if path.endswith(".sdf") else meta["native_heavy"]})
+                        "heavy": dk.heavy_atoms_of(path)})
     print(f"{len(natives)} known binders against {len(decoy_list)} decoys")
     result = run_control(natives, decoy_list, a.receptor, a.center,
                          [a.size] * 3, a.exhaustiveness, a.seed,
