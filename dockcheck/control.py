@@ -11,6 +11,15 @@ from statistics import median
 from scipy.stats import spearmanr
 
 
+def _why(err):
+    """One readable line from a Vina or RDKit exception."""
+    msg = str(err).strip().replace("\n", " ")
+    if "not a valid AutoDock type" in msg:
+        i = msg.find("Atom type")
+        return msg[i:i + 60].strip() if i >= 0 else msg[:120]
+    return msg[:160] if msg else type(err).__name__
+
+
 def dock_one(ligand_pdbqt, receptor_pdbqt, center, size,
              exhaustiveness=8, seed=42, scoring="vina"):
     """Best score for one ligand. Imported lazily so tests need no Vina."""
@@ -52,21 +61,42 @@ def run_control(natives, decoys, receptor, center, size,
     Returns a dict the report module turns into a verdict.
     """
     started = time.time()
-    decoy_scores, decoy_heavy, decoy_rows = [], [], []
+    decoy_scores, decoy_heavy, decoy_rows, skipped = [], [], [], []
     for i, d in enumerate(decoys):
-        s = dock_one(d["pdbqt"], receptor, center, size,
-                     exhaustiveness, seed, scoring)
+        try:
+            s = dock_one(d["pdbqt"], receptor, center, size,
+                         exhaustiveness, seed, scoring)
+        except Exception as err:
+            # One unusable ligand must not end a 200 ligand run. Boron
+            # drugs are the common case: AutoDock has no atom type for
+            # boron, so bortezomib and its relatives cannot be scored.
+            skipped.append({"id": d["id"], "why": _why(err)})
+            continue
         decoy_scores.append(s)
         decoy_heavy.append(d["heavy"])
         decoy_rows.append({"id": d["id"], "score": s, "heavy": d["heavy"]})
         if progress is not None and (i + 1) % progress == 0:
-            print(f"  {i + 1}/{len(decoys)} decoys, "
+            print(f"  {i + 1}/{len(decoys)} decoys, {len(skipped)} skipped, "
                   f"{(time.time() - started) / 60:.1f} min", flush=True)
+
+    if len(decoy_scores) == 0:
+        raise RuntimeError(
+            "every decoy failed to dock, so there is nothing to compare "
+            "against. The first reason was: "
+            + (skipped[0]["why"] if skipped else "unknown"))
 
     native_rows = []
     for n in natives:
-        s = dock_one(n["pdbqt"], receptor, center, size,
-                     exhaustiveness, seed, scoring)
+        try:
+            s = dock_one(n["pdbqt"], receptor, center, size,
+                         exhaustiveness, seed, scoring)
+        except Exception as err:
+            # A known binder that will not dock is fatal. Without it
+            # there is no control, and silently dropping it would turn
+            # a broken run into a passing one.
+            raise RuntimeError(
+                f"the known binder {n['id']} could not be docked, so the "
+                f"control cannot be run: {_why(err)}") from err
         native_rows.append({"id": n["id"], "score": s, "heavy": n["heavy"],
                             "percentile": percentile_of(s, decoy_scores),
                             "beaten_by": sum(1 for d in decoy_scores if d < s)})
@@ -75,7 +105,7 @@ def run_control(natives, decoys, receptor, center, size,
         "scoring": scoring, "exhaustiveness": exhaustiveness, "seed": seed,
         "receptor": receptor, "center": list(center), "size": list(size),
         "natives": native_rows, "decoys": decoy_rows,
-        "n_decoys": len(decoy_rows),
+        "n_decoys": len(decoy_rows), "skipped": skipped,
         "decoy_median": median(decoy_scores) if decoy_scores else None,
         "size_bias": size_bias(decoy_scores, decoy_heavy),
         "minutes": (time.time() - started) / 60.0,

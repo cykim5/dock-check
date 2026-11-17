@@ -92,13 +92,22 @@ def to_markdown(result, v):
           f"- scoring function: `{result['scoring']}`",
           f"- exhaustiveness {result['exhaustiveness']}, seed {result['seed']}",
           f"- box centre {result['center']}, size {result['size']}",
-          f"- {result['n_decoys']} decoys, median score "
+          f"- {result['n_decoys']} decoys scored, median "
           f"{result['decoy_median']:.3f}",
           f"- {result['minutes']:.1f} minutes", ""]
     sb = result.get("size_bias")
     if sb is not None:
         L.append(f"- score against heavy atom count: rho {sb['rho']:.2f} "
                  f"(p={sb['p']:.1e}, n={sb['n']})")
+    sk = result.get("skipped") or []
+    if len(sk) > 0:
+        L += ["", f"### {len(sk)} decoys could not be docked", "",
+              "Listed so the count is not silently smaller than intended.",
+              ""]
+        for s in sk[:12]:
+            L.append(f"- `{s['id']}`: {s['why']}")
+        if len(sk) > 12:
+            L.append(f"- and {len(sk) - 12} more")
     L += ["", "## What this does and does not tell you", "",
           "Passing means the protocol can find a binder it was not told",
           "about, on this target, in this box. It does not mean any",

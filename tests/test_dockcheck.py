@@ -158,3 +158,39 @@ def test_heavy_atoms_from_pdbqt_skips_polar_hydrogens(tmp_path):
         "ATOM      2  C   UNL     1       0.000   0.000   0.000  1.00  0.00     0.100 C \n"
         "ATOM      3  H   UNL     1       2.000   0.000   0.000  1.00  0.00     0.200 HD\n")
     assert heavy_atoms_of(str(p)) == 2
+
+
+# ------------------------------------------- one bad ligand is survivable
+def test_a_broken_decoy_is_skipped_not_fatal(monkeypatch):
+    import dockcheck.control as C
+
+    def fake(path, *a, **k):
+        if "BORON" in path:
+            raise TypeError("PDBQT parsing error: Atom type B is not a "
+                            "valid AutoDock type")
+        return -7.0 if "NATIVE" in path else -6.0
+
+    monkeypatch.setattr(C, "dock_one", fake)
+    out = C.run_control(
+        [{"id": "n", "pdbqt": "NATIVE.pdbqt", "heavy": 37}],
+        [{"id": "good", "pdbqt": "A.pdbqt", "heavy": 37},
+         {"id": "bad", "pdbqt": "BORON.pdbqt", "heavy": 37}],
+        "r.pdbqt", [0, 0, 0], [24, 24, 24])
+    assert out["n_decoys"] == 1
+    assert len(out["skipped"]) == 1
+    assert "Atom type B" in out["skipped"][0]["why"]
+
+
+def test_a_broken_known_binder_is_fatal(monkeypatch):
+    import dockcheck.control as C
+
+    def fake(path, *a, **k):
+        if "NATIVE" in path:
+            raise TypeError("PDBQT parsing error: Atom type B is not valid")
+        return -6.0
+
+    monkeypatch.setattr(C, "dock_one", fake)
+    with pytest.raises(RuntimeError, match="control cannot be run"):
+        C.run_control([{"id": "n", "pdbqt": "NATIVE.pdbqt", "heavy": 37}],
+                      [{"id": "g", "pdbqt": "A.pdbqt", "heavy": 37}],
+                      "r.pdbqt", [0, 0, 0], [24, 24, 24])
