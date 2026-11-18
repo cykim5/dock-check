@@ -2,8 +2,11 @@
 
 Three steps people skip, each of which quietly ruins a decoy set:
 
-  largest fragment   ChEMBL stores salts, so "drug" often means drug
-                     plus a sodium. Docking the sodium is not useful.
+  the parent         ChEMBL stores salts, so "drug" often means drug
+                     plus a sodium. Docking the sodium is not useful,
+                     and the counterion carries charge and polar groups
+                     that a scoring function reads as the drug's own.
+                     See salts.py for what that costs.
   explicit hydrogens Geometry and hydrogen bonding both need them.
   one conformer      Enough for a decoy. A native ligand you care about
                      deserves more, which is what n_confs is for.
@@ -13,6 +16,8 @@ from rdkit.Chem import AllChem
 from rdkit.rdBase import DisableLog
 
 from meeko import MoleculePreparation, PDBQTWriterLegacy
+
+from .salts import parent_mol
 
 DisableLog("rdApp.*")
 
@@ -26,10 +31,11 @@ def largest_fragment(mol):
 
 def embed(smiles, seed=42, n_confs=1):
     """SMILES to a 3D molecule, or (None, reason)."""
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
+    if Chem.MolFromSmiles(smiles) is None:
         return None, "RDKit could not parse the SMILES"
-    mol = largest_fragment(mol)
+    mol = parent_mol(smiles)
+    if mol is None:
+        return None, "nothing left after the counterions came off"
     mol = Chem.AddHs(mol)
     params = AllChem.ETKDGv3()
     params.randomSeed = seed

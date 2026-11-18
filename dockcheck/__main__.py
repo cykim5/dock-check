@@ -27,12 +27,36 @@ def cmd_decoys(a):
         print(f"reusing {len(rows)} molecules from {pool_csv}")
     else:
         print("fetching approved small molecules from ChEMBL ...")
-        rows = dk.fetch_pool(a.mw_min, a.mw_max)
+        rows = dk.fetch_pool(a.mw_min, a.mw_max + dk.SALT_ALLOWANCE)
         dk.write_pool(rows, pool_csv)
         print(f"wrote {len(rows)} to {pool_csv}")
 
     from .prepare import embed, heavy_atoms, to_pdbqt
+    from .salts import collapse_to_parents
     random.Random(a.seed).shuffle(rows)
+
+    # One row per molecule, not one per formulated product. Done after
+    # the shuffle, so which salt form represents a parent is decided by
+    # the seed rather than by ChEMBL's ordering.
+    rows, collapsed, unparsable = collapse_to_parents(rows)
+    print(f"{len(rows)} distinct molecules; dropped {len(collapsed)} salt "
+          f"forms of a parent already in the set")
+    if len(unparsable) > 0:
+        print(f"  {len(unparsable)} could not be reduced to a parent")
+
+    # The window the user asked for, applied to the molecule that will
+    # actually be docked rather than to the salt's weight.
+    before = len(rows)
+    rows = [r for r in rows if r["parent_mw"] is not None
+            and a.mw_min <= r["parent_mw"] <= a.mw_max]
+    if before != len(rows):
+        print(f"  {before - len(rows)} fell outside {a.mw_min:.0f} to "
+              f"{a.mw_max:.0f} Da once the counterion came off")
+
+    # Counted on the final set, so these numbers describe the same
+    # molecules the decoys are drawn from.
+    salt_rows = [r for r in rows if len(r["stripped"]) > 0]
+
     lig_dir = os.path.join(a.out, "ligands")
     os.makedirs(lig_dir, exist_ok=True)
     kept, skipped = [], 0
@@ -59,7 +83,17 @@ def cmd_decoys(a):
             print(f"  prepared {len(kept)}/{a.n}", flush=True)
     with open(os.path.join(a.out, "decoys.json"), "w") as f:
         json.dump({"native_heavy": heavy, "window": [lo, hi],
-                   "decoys": kept}, f, indent=2)
+                   "decoys": kept,
+                   "salts": {
+                       "distinct_parents": len(rows),
+                       "collapsed": len(collapsed),
+                       "unparsable": len(unparsable),
+                       "drawn_from_a_salt": len(salt_rows),
+                       "examples": [
+                           {"id": c.get("id"),
+                            "duplicate_of": c.get("duplicate_of")}
+                           for c in collapsed[:12]],
+                   }}, f, indent=2)
     print(f"prepared {len(kept)} decoys, skipped {skipped}")
 
 
@@ -85,6 +119,8 @@ def cmd_run(a):
     result = run_control(natives, decoy_list, a.receptor, a.center,
                          [a.size] * 3, a.exhaustiveness, a.seed,
                          a.scoring, progress=25)
+    if meta.get("salts") is not None:
+        result["salts"] = meta["salts"]
     v, md = write_report(result, a.out, a.bar)
     print()
     print(md)

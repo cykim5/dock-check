@@ -21,6 +21,12 @@ Most people know in principle that a control is a good idea. Almost no published
 
 Each of those has a way to go quietly wrong, and the most common one is size. Empirical scoring functions correlate strongly with how many heavy atoms a molecule has. Pick decoys without matching on size and a large native ligand sails past them, the control passes, and it has told you nothing.
 
+The second one is subtler, and it is the reason a decoy set is usually smaller than it says. A drug library is a list of formulated products, not a list of molecules. ChEMBL holds paroxetine hydrochloride and paroxetine mesylate under different identifiers, and they are the same molecule once the counterion comes off. Take the stored entries at face value and you draw both, so a decoy set of 200 contains fewer than 200 structures and a repeated parent counts twice wherever it happens to score.
+
+The counterion is not an inert label while it is still attached. It carries the charge and the polar groups that a scoring function reads as chemistry, so the mesylate makes paroxetine look like it owns a sulfonate, and the mirror mistake throws out fluorescein for having a sodium. The stored molecular weight belongs to the salt too, which means a weight filter is selecting on a molecule that never reaches the docking.
+
+dock-check reduces every entry to its parent before anything is docked, keeps one decoy per distinct parent, applies your weight window to the parent rather than to the product, and says in the report how many salt forms it collapsed. That last number is the useful one: it tells you how much smaller your library really is.
+
 ## Install
 
 The docking itself needs AutoDock Vina, which is easiest through conda:

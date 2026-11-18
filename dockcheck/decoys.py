@@ -19,6 +19,14 @@ import urllib.request
 API = "https://www.ebi.ac.uk/chembl/api/data/molecule.json"
 PAGE = 1000
 
+# ChEMBL reports full_mwt for the formulated salt, counterion included,
+# while docking only ever sees the parent. So the fetch asks for a
+# window this much wider at the top and the real window is applied to
+# the parent weight afterwards. Without the allowance a 380 Da drug
+# sold as a 476 Da mesylate is dropped for being too heavy, when the
+# molecule that would be docked is well inside the window.
+SALT_ALLOWANCE = 200.0
+
 
 def _get(url):
     req = urllib.request.Request(

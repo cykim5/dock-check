@@ -105,6 +105,13 @@ def to_markdown(result, v):
     if sb is not None:
         L.append(f"- score against heavy atom count: rho {sb['rho']:.2f} "
                  f"(p={sb['p']:.1e}, n={sb['n']})")
+    salts = result.get("salts")
+    if salts is not None:
+        L.append(f"- decoys are one per molecule, not one per product: "
+                 f"{salts['collapsed']} salt forms of a parent already "
+                 f"in the set were dropped before any docking, leaving "
+                 f"{salts['distinct_parents']} distinct molecules to "
+                 f"draw from")
     sk = result.get("skipped") or []
     if len(sk) > 0:
         L += ["", f"### {len(sk)} decoys could not be docked", "",

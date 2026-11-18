@@ -215,3 +215,107 @@ def test_with_no_matched_natives_it_falls_back_to_all_of_them():
     r["natives"][0]["heavy"] = 21
     v = verdict(r)
     assert v["judged_on"] == ["tiny"]
+
+
+# ------------------------------------------- one molecule, many products
+# A library of approved drugs is a list of formulated products. These
+# are real ChEMBL style entries: the same molecule sold three ways.
+PAROXETINE = "C1CNC[C@@H](COc2ccc3OCOc3c2)[C@@H]1c1ccc(F)cc1"
+PAROXETINE_MESYLATE = PAROXETINE + ".CS(=O)(=O)O"
+PAROXETINE_HCL = PAROXETINE + ".Cl"
+FLUORESCEIN_SODIUM = ("[Na+].[Na+].[O-]C(=O)c1ccccc1C1=C2C=CC(=O)C=C2Oc2cc"
+                      "([O-])ccc21")
+
+
+def test_three_salt_forms_are_one_molecule():
+    from dockcheck.salts import parent_key
+    keys = {parent_key(s) for s in
+            (PAROXETINE, PAROXETINE_MESYLATE, PAROXETINE_HCL)}
+    assert len(keys) == 1
+    assert None not in keys
+
+
+def test_the_mesylate_does_not_lend_the_drug_a_sulfonate():
+    """The counterion carries groups a scoring function reads as real.
+
+    Paroxetine has no sulfur. Read the stored SMILES and it appears to
+    own a sulfonate, which is the mesylate, and which dissociates in
+    water before the drug reaches anything.
+    """
+    from dockcheck.salts import parent_mol
+    mol = parent_mol(PAROXETINE_MESYLATE)
+    assert any(a.GetSymbol() == "S" for a in mol.GetAtoms()) == False
+
+
+def test_a_sodium_salt_of_an_organic_drug_keeps_its_drug():
+    """The mirror mistake: discarding fluorescein for having a sodium."""
+    from dockcheck.salts import parent_mol
+    mol = parent_mol(FLUORESCEIN_SODIUM)
+    assert any(a.GetSymbol() == "Na" for a in mol.GetAtoms()) == False
+    assert sum(1 for a in mol.GetAtoms() if a.GetSymbol() == "C") == 20
+
+
+def test_parent_weight_is_the_molecule_that_gets_docked():
+    from dockcheck.salts import parent_weight
+    free = parent_weight(PAROXETINE)
+    assert parent_weight(PAROXETINE_MESYLATE) == pytest.approx(free)
+    assert parent_weight(PAROXETINE_HCL) == pytest.approx(free)
+    assert free == pytest.approx(329.4, abs=0.5)
+
+
+def test_stripped_fragments_say_what_came_off():
+    from dockcheck.salts import stripped_fragments, is_salt
+    assert stripped_fragments(PAROXETINE) == []
+    assert is_salt(PAROXETINE) == False
+    assert stripped_fragments(PAROXETINE_HCL) == ["Cl"]
+    assert stripped_fragments(FLUORESCEIN_SODIUM) == ["[Na+]", "[Na+]"]
+
+
+def test_collapsing_leaves_one_row_per_molecule():
+    from dockcheck.salts import collapse_to_parents
+    rows = [{"id": "CHEMBL_HCL", "smiles": PAROXETINE_HCL},
+            {"id": "CHEMBL_MES", "smiles": PAROXETINE_MESYLATE},
+            {"id": "CHEMBL_FREE", "smiles": PAROXETINE},
+            {"id": "CHEMBL_FLU", "smiles": FLUORESCEIN_SODIUM}]
+    kept, collapsed, unparsable = collapse_to_parents(rows)
+    assert [r["id"] for r in kept] == ["CHEMBL_HCL", "CHEMBL_FLU"]
+    assert len(collapsed) == 2
+    assert len(unparsable) == 0
+    # every dropped row says which row it repeats
+    assert {c["duplicate_of"] for c in collapsed} == {"CHEMBL_HCL"}
+
+
+def test_the_first_row_seen_is_the_one_kept():
+    """So the seed decides which salt form represents a parent."""
+    from dockcheck.salts import collapse_to_parents
+    rows = [{"id": "second", "smiles": PAROXETINE_MESYLATE},
+            {"id": "first", "smiles": PAROXETINE_HCL}]
+    kept, collapsed, _ = collapse_to_parents(rows)
+    assert [r["id"] for r in kept] == ["second"]
+    assert collapsed[0]["id"] == "first"
+
+
+def test_unparsable_rows_are_reported_not_dropped_silently():
+    from dockcheck.salts import collapse_to_parents
+    rows = [{"id": "ok", "smiles": PAROXETINE},
+            {"id": "junk", "smiles": "not a molecule"},
+            {"id": "empty", "smiles": ""}]
+    kept, collapsed, unparsable = collapse_to_parents(rows)
+    assert [r["id"] for r in kept] == ["ok"]
+    assert {r["id"] for r in unparsable} == {"junk", "empty"}
+
+
+def test_embed_docks_the_parent_not_the_salt():
+    from dockcheck.prepare import embed, heavy_atoms
+    free, _ = embed(PAROXETINE)
+    salt, _ = embed(PAROXETINE_MESYLATE)
+    assert heavy_atoms(free) == heavy_atoms(salt)
+
+
+def test_the_report_states_what_was_collapsed():
+    r = result_from({"known": -12.0}, [-5.0] * 99 + [-13.0])
+    r["salts"] = {"distinct_parents": 2058, "collapsed": 680,
+                  "unparsable": 0, "drawn_from_a_salt": 300, "examples": []}
+    md = to_markdown(r, verdict(r))
+    assert "680 salt forms" in md
+    assert "2058 distinct molecules" in md
