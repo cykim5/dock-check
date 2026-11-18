@@ -140,12 +140,14 @@ def test_no_warning_when_every_native_is_in_range():
     assert "size_match_warning" not in verdict(r)
 
 
-def test_matched_subset_percentile_is_reported():
+def test_the_unmatched_binder_is_named_but_not_judged_on():
     r = result_from({"small": -9.0, "big": -6.0},
                     [-5.0] * 50 + [-7.0] * 50, heavy=37)
     r["natives"][0]["heavy"] = 21
     v = verdict(r)
-    assert v["worst_percentile_matched"] == pytest.approx(50.0)
+    assert v["not_judged_on"] == ["small"]
+    assert v["judged_on"] == ["big"]
+    assert v["worst_percentile"] == pytest.approx(50.0)
 
 
 # ------------------------------------- heavy atoms, whatever the format
@@ -194,3 +196,22 @@ def test_a_broken_known_binder_is_fatal(monkeypatch):
         C.run_control([{"id": "n", "pdbqt": "NATIVE.pdbqt", "heavy": 37}],
                       [{"id": "g", "pdbqt": "A.pdbqt", "heavy": 37}],
                       "r.pdbqt", [0, 0, 0], [24, 24, 24])
+
+
+# --------------------- the verdict must not rest on an unreadable number
+def test_an_unmatched_native_does_not_decide_the_verdict():
+    """A ligand the report calls unreadable cannot set the outcome."""
+    decoys = [-9.0 - 0.01 * i for i in range(100)]      # -9.00 to -9.99
+    r = result_from({"matched": -9.98, "tiny": -9.40}, decoys, heavy=37)
+    r["natives"][1]["heavy"] = 21                       # outside the window
+    v = verdict(r)
+    assert v["judged_on"] == ["matched"]
+    assert v["not_judged_on"] == ["tiny"]
+    assert v["verdict"] == "PASS"
+
+
+def test_with_no_matched_natives_it_falls_back_to_all_of_them():
+    r = result_from({"tiny": -6.0}, [-5.0] * 50 + [-7.0] * 50, heavy=37)
+    r["natives"][0]["heavy"] = 21
+    v = verdict(r)
+    assert v["judged_on"] == ["tiny"]

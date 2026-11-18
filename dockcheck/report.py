@@ -27,12 +27,22 @@ def _unmatched(result):
 
 
 def verdict(result, bar=PASS_PERCENTILE):
-    """PASS, WEAK or FAIL, plus the reason, from the worst native."""
-    pcts = [n["percentile"] for n in result["natives"]
-            if n["percentile"] is not None]
+    """PASS, WEAK or FAIL, from the worst size matched known binder.
+
+    Known binders outside the decoy size range are reported but do not
+    set the verdict. Their percentiles compare molecules of different
+    sizes, so letting one decide the outcome would mean calling a run
+    a failure on the strength of a number the report itself says must
+    not be read.
+    """
+    unmatched_ids = {u["id"] for u in _unmatched(result)}
+    scored = [n for n in result["natives"] if n["percentile"] is not None]
+    matched = [n for n in scored if n["id"] not in unmatched_ids]
+    judged = matched if len(matched) > 0 else scored
+    pcts = [n["percentile"] for n in judged]
     if len(pcts) == 0:
-        return {"verdict": "FAIL", "bar": bar, "worst": None,
-                "reason": "no native ligand was scored"}
+        return {"verdict": "FAIL", "bar": bar, "worst_percentile": None,
+                "reason": "no known binder was scored"}
     worst = min(pcts)
     if worst >= bar:
         v = "PASS"
@@ -48,7 +58,7 @@ def verdict(result, bar=PASS_PERCENTILE):
                   f"percentile, so a compound that outscores it has shown "
                   f"nothing: {100 - worst:.0f}% of random drugs do too")
     out = {"verdict": v, "bar": bar, "worst_percentile": worst,
-           "reason": reason}
+           "reason": reason, "judged_on": [n["id"] for n in judged]}
     unmatched = _unmatched(result)
     if len(unmatched) > 0:
         out["size_match_warning"] = (
@@ -57,11 +67,7 @@ def verdict(result, bar=PASS_PERCENTILE):
             "should not be read as a result: "
             + ", ".join(f"{u['id']} ({u['heavy']} heavy atoms)"
                         for u in unmatched))
-        matched = [n["percentile"] for n in result["natives"]
-                   if n["percentile"] is not None
-                   and n["id"] not in {u["id"] for u in unmatched}]
-        if len(matched) > 0:
-            out["worst_percentile_matched"] = min(matched)
+        out["not_judged_on"] = sorted(unmatched_ids)
     sb = result.get("size_bias")
     if sb is not None and sb["rho"] <= SIZE_BIAS_CONCERN:
         out["size_bias_warning"] = (
@@ -76,9 +82,9 @@ def to_markdown(result, v):
          f"**{v['reason']}.**", ""]
     if "size_match_warning" in v:
         L += [f"> **Not size matched:** {v['size_match_warning']}.", ""]
-        if "worst_percentile_matched" in v:
-            L += [f"> Among the size matched binders the worst is at the "
-                  f"{v['worst_percentile_matched']:.1f}th percentile.", ""]
+        if "not_judged_on" in v:
+            L += [f"> The verdict is set by the size matched binders only: "
+                  f"{', '.join(v['judged_on'])}.", ""]
     if "size_bias_warning" in v:
         L += [f"> Also: {v['size_bias_warning']}.", ""]
     L += ["## Known binders against size matched decoys", "",
