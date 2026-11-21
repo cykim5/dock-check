@@ -39,9 +39,14 @@ pip install rdkit meeko pytest
 
 ## Use
 
-Two steps. Build a decoy set matched to your native ligand, then run the control.
+Three steps. Check the site is open, build a decoy set matched to your native ligand, then run the control.
 
 ```bash
+# 0. is the site even open?
+python -m dockcheck receptor \
+    --receptor structure.pdb \
+    --resname UDP --resseq 900
+
 # 1. decoys the same size as your known binder
 python -m dockcheck decoys \
     --native ligand.sdf \
@@ -60,6 +65,8 @@ python -m dockcheck run \
 
 You get `report/dock-check.md` and `report/dock-check.json`.
 
+Step 0 takes a second and is the one people skip. It is described below. You can fold it into step 2 with `--site-ligand`, which refuses to dock into a blocked site unless you pass `--force`.
+
 Pass `--native` more than once if your target has several known binders. The verdict is set by the worst of them, because a protocol that finds one binder and misses another is not one you can point at an unknown compound.
 
 ## Reading the verdict
@@ -77,21 +84,78 @@ Two extra warnings appear when they apply:
 - **Not size matched.** A known binder whose heavy atom count falls outside the decoy range. Its percentile compares molecules of different sizes and should not be read as a result.
 - **Size bias.** The correlation between score and heavy atom count across the decoys. Strongly negative means the ranking is substantially reporting molecular size.
 
+## Check the receptor before you blame the compounds
+
+A failing control tells you the screen is untrustworthy. It does not tell you which part was wrong, and people work through the possibilities in a predictable order: the box, the scoring function, the protonation states, the conformer generation. The receptor comes last, because a structure feels like a fact rather than a choice.
+
+It is a choice. A structure solved **without** the ligand bound has had nothing holding its site open, and side chains relax into the empty space. Dock into that and every compound is competing with the protein for the same volume. The ranking that comes out is mostly a measure of which molecules can pile up bulk nearby, which is to say a measure of size.
+
+So put the ligand where the crystal says it goes, and count how much of the receptor is already standing there:
+
+```
+# dock-check receptor: BACKBONE
+
+the site is occluded: 15 of 25 ligand atoms clash with the receptor, worst by
+2.23 A, and 4 of those clashes are with backbone (worst 1.48 A), which no
+flexible side chain setting can move. Dock against a structure solved with
+something in this site. Clashing residues: ARG A272, ASN A260, ASN A276, GLY A271
+
+nothing is bound in this structure apart from solvent, which is the condition
+this check exists for: a site with nothing in it had nothing holding it open.
+```
+
+Three verdicts, because there are three different things to do:
+
+| Verdict | What it means | What to do |
+| --- | --- | --- |
+| `clear` | nothing is in the way | dock |
+| `side-chain` | something is in the way, and it can move | try flexible side chain docking before giving up on the structure |
+| `backbone` | something is in the way, and it cannot move | get a structure solved with something in this site |
+
+`backbone` exits with status 2, so a pipeline can stop before spending a day on it.
+
+Two details that decide whether the check is any use. Nitrogen and oxygen are allowed to sit 0.6 A closer than their radii suggest, because a hydrogen bond legitimately pulls two polar atoms to about 2.7 A, and a check that flagged every hydrogen bond would condemn every site it was pointed at. And chemically modified residues such as selenomethionine are read as protein rather than as bound ligands, even though the file writes them as `HETATM`: 2B69 has 80 heavy atoms of selenomethionine, and treating those as cargo rather than chain leaves ten holes in the receptor exactly where a clash might be found.
+
+**What it cannot do.** The check needs a bound ligand somewhere to say where the site is. If all you have is an apo structure, which is the case that most needs this warning, there is nothing to measure against and you are back to pocket detection. Finding a holo structure of a close homologue and superposing is usually the answer, and that is what the example below does.
+
 ## A worked example
 
-[`examples/uxs1/`](examples/uxs1/) holds a real control from a real project: a screen of every approved drug against UXS1, an enzyme with a solved structure and no known inhibitor.
+[`examples/uxs1/`](examples/uxs1/) holds the same control run twice against the same enzyme, once into each of two structures of it. UXS1 has a solved structure and no known inhibitor, and the project around it was a screen of every approved drug.
 
-The screen produced a confident looking ranked list with a plausible chemical series near the top. The control says the list is worthless:
+The screen produced a confident looking ranked list with a plausible chemical series near the top. The control said the list was worthless. The enzyme's own substrate sat at the 58th percentile, so 83 of 199 random approved drugs outscored the molecule this enzyme evolved to bind.
 
-| Ligand | Heavy atoms | Score | Percentile |
+Then came four days of fixing the wrong thing. Each repair was reasonable, each one helped, and none of them worked:
+
+| What was changed | Substrate percentile |
+| --- | --- |
+| nothing, as first run | 31.9 |
+| different scoring function | 44.2 |
+| search box, which was 8.6 A off the crystallographic ligand | 58.3 |
+| ligands ionized, since the substrate carries about three negative charges | 67.3 |
+| scoring function and ionization together | 78.9 |
+
+Still short of the bar, which had been fixed at the 95th percentile before the screen ran.
+
+The cause was none of those. The structure was **4GLL, solved with the cofactor bound and the substrate site empty**, and ARG272 had relaxed into that empty site. Re-running against 2B69, the same enzyme at 1.21 A solved with the substrate actually in place, changed everything that the four repairs could not:
+
+| Ligand | Heavy atoms | 4GLL | 2B69 |
 | --- | --- | --- | --- |
-| UDP-glucuronate, the enzyme's own substrate | 37 | -7.938 | **58.3** |
-| UDP-galactose | 36 | -7.866 | 54.8 |
-| UDP-xylose, the product | 34 | -7.296 | 30.2 |
+| UDP-xylose | 34 | 30.2 | **99.5** |
+| UDP-galactose | 36 | 54.8 | **99.0** |
+| UDP-glucuronate, the substrate | 37 | 58.3 | **88.4** |
 
-83 of 199 random approved drugs outscore the molecule this enzyme evolved to bind. The chemical series near the top of the screen did not survive a corrected search box either.
+And the tell, which is the part worth remembering. Correlation between score and molecular size, over the same decoys:
 
-That result is why this exists.
+| Receptor | Spearman rho |
+| --- | --- |
+| 4GLL, blocked site | **-0.67** |
+| 2B69, open site | **+0.11** |
+
+A blocked pocket cannot form real contacts, so the only thing separating one compound from another is how much bulk it can pile up nearby. The ranking was substantially a ranking by size. Open the pocket and that bias does not shrink, it disappears.
+
+The receptor check takes about a second and reports 15 of the substrate's 25 atoms clashing, 4 of them with backbone. Running it first would have replaced all four repairs with one instruction: use a different structure.
+
+That is why this exists.
 
 ## What a PASS does and does not mean
 

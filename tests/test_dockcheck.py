@@ -108,7 +108,8 @@ def test_markdown_leads_with_the_verdict():
 
 
 # --------------------------------------------- the real historical case
-UXS1 = Path(__file__).resolve().parents[1] / "examples" / "uxs1" / "scores.json"
+UXS1 = (Path(__file__).resolve().parents[1] / "examples" / "uxs1"
+        / "4gll-blocked" / "scores.json")
 
 
 @pytest.mark.skipif(UXS1.exists() == False, reason="example data not present")
@@ -319,3 +320,178 @@ def test_the_report_states_what_was_collapsed():
     md = to_markdown(r, verdict(r))
     assert "680 salt forms" in md
     assert "2058 distinct molecules" in md
+
+
+# --- the receptor check -------------------------------------------------
+#
+# Fixtures are written by hand rather than fetched, so these say what the
+# check does rather than what one PDB entry happens to contain.
+
+def _pdb_line(record, serial, name, resname, chain, resseq, x, y, z,
+              element, altloc=" "):
+    return ("%-6s%5d %-4s%1s%-3s %1s%4s    %8.3f%8.3f%8.3f  1.00  0.00"
+            "          %2s\n" % (record, serial, name, altloc, resname, chain,
+                                 str(resseq), x, y, z, element))
+
+
+def _write(tmp_path, name, lines):
+    path = tmp_path / name
+    path.write_text("".join(lines))
+    return str(path)
+
+
+def test_a_clear_site_is_called_clear(tmp_path):
+    from dockcheck import receptor as rc
+    rec = _write(tmp_path, "rec.pdb", [
+        _pdb_line("ATOM", 1, "CA", "ALA", "A", 1, 0.0, 0.0, 0.0, "C"),
+    ])
+    lig = _write(tmp_path, "lig.pdb", [
+        _pdb_line("HETATM", 2, "C1", "LIG", "A", 900, 10.0, 0.0, 0.0, "C"),
+    ])
+    out = rc.check(rec, lig)
+    assert out["verdict"] == "clear"
+    assert out["clashing_atoms"] == 0
+
+
+def test_a_side_chain_in_the_way_is_recoverable(tmp_path):
+    """CB is a side chain atom, so flexible docking is worth a try."""
+    from dockcheck import receptor as rc
+    rec = _write(tmp_path, "rec.pdb", [
+        _pdb_line("ATOM", 1, "CB", "ARG", "A", 272, 0.0, 0.0, 0.0, "C"),
+    ])
+    lig = _write(tmp_path, "lig.pdb", [
+        _pdb_line("HETATM", 2, "C1", "LIG", "A", 900, 1.5, 0.0, 0.0, "C"),
+    ])
+    out = rc.check(rec, lig)
+    assert out["verdict"] == "side-chain"
+    assert out["backbone_clashes"] == 0
+
+
+def test_backbone_in_the_way_is_not_recoverable(tmp_path):
+    """The distinction the whole check exists to draw."""
+    from dockcheck import receptor as rc
+    rec = _write(tmp_path, "rec.pdb", [
+        _pdb_line("ATOM", 1, "CA", "GLY", "A", 271, 0.0, 0.0, 0.0, "C"),
+    ])
+    lig = _write(tmp_path, "lig.pdb", [
+        _pdb_line("HETATM", 2, "C1", "LIG", "A", 900, 1.5, 0.0, 0.0, "C"),
+    ])
+    out = rc.check(rec, lig)
+    assert out["verdict"] == "backbone"
+    assert out["backbone_clashes"] == 1
+
+
+def test_a_hydrogen_bond_is_not_a_clash(tmp_path):
+    """N and O at 2.7 A is a hydrogen bond, which is the site working.
+
+    Without the polar allowance this check would condemn every site it
+    was pointed at, since a real binding site is full of these.
+    """
+    from dockcheck import receptor as rc
+    rec = _write(tmp_path, "rec.pdb", [
+        _pdb_line("ATOM", 1, "NE", "ARG", "A", 272, 0.0, 0.0, 0.0, "N"),
+    ])
+    lig = _write(tmp_path, "lig.pdb", [
+        _pdb_line("HETATM", 2, "O1", "LIG", "A", 900, 2.7, 0.0, 0.0, "O"),
+    ])
+    out = rc.check(rec, lig)
+    assert out["verdict"] == "clear"
+
+
+def test_two_carbons_at_the_same_distance_do_clash(tmp_path):
+    """The companion to the test above: the allowance is for polar pairs
+    only, so the same 2.7 A between two carbons is still too close."""
+    from dockcheck import receptor as rc
+    rec = _write(tmp_path, "rec.pdb", [
+        _pdb_line("ATOM", 1, "CD", "ARG", "A", 272, 0.0, 0.0, 0.0, "C"),
+    ])
+    lig = _write(tmp_path, "lig.pdb", [
+        _pdb_line("HETATM", 2, "C1", "LIG", "A", 900, 2.7, 0.0, 0.0, "C"),
+    ])
+    out = rc.check(rec, lig)
+    assert out["clashing_atoms"] == 1
+
+
+def test_selenomethionine_counts_as_protein(tmp_path):
+    """MSE is written as HETATM but it is chain, not cargo. Read it as a
+    ligand and the receptor has a hole where a clash should be."""
+    from dockcheck import receptor as rc
+    rec = _write(tmp_path, "rec.pdb", [
+        _pdb_line("HETATM", 1, "CA", "MSE", "A", 25, 0.0, 0.0, 0.0, "C"),
+    ])
+    lig = _write(tmp_path, "lig.pdb", [
+        _pdb_line("HETATM", 2, "C1", "LIG", "A", 900, 1.5, 0.0, 0.0, "C"),
+    ])
+    out = rc.check(rec, lig)
+    assert out["verdict"] == "backbone"
+    assert rc.bound_ligands(rec) == []
+
+
+def test_water_and_buffer_are_not_bound_ligands(tmp_path):
+    from dockcheck import receptor as rc
+    rec = _write(tmp_path, "rec.pdb", [
+        _pdb_line("ATOM", 1, "CA", "ALA", "A", 1, 0.0, 0.0, 0.0, "C"),
+        _pdb_line("HETATM", 2, "O", "HOH", "A", 500, 5.0, 0.0, 0.0, "O"),
+        _pdb_line("HETATM", 3, "C1", "GOL", "A", 600, 8.0, 0.0, 0.0, "C"),
+        _pdb_line("HETATM", 4, "PA", "UDP", "A", 900, 12.0, 0.0, 0.0, "P"),
+    ])
+    names = [l["residue"] for l in rc.bound_ligands(rec)]
+    assert names == ["UDP"]
+
+
+def test_an_empty_structure_reports_nothing_bound(tmp_path):
+    """The condition the check exists for, stated plainly."""
+    from dockcheck import receptor as rc
+    rec = _write(tmp_path, "rec.pdb", [
+        _pdb_line("ATOM", 1, "CA", "ALA", "A", 1, 0.0, 0.0, 0.0, "C"),
+        _pdb_line("HETATM", 2, "O", "HOH", "A", 500, 5.0, 0.0, 0.0, "O"),
+    ])
+    assert rc.bound_ligands(rec) == []
+
+
+def test_one_copy_of_a_repeated_ligand_can_be_named(tmp_path):
+    """2B69 carries UDP twice in the same chain. Without a residue
+    number both copies are read as one 50 atom ligand."""
+    from dockcheck import receptor as rc
+    lines = [_pdb_line("ATOM", 1, "CA", "ALA", "A", 1, 0.0, 0.0, 0.0, "C")]
+    lines.append(_pdb_line("HETATM", 2, "PA", "UDP", "A", 900, 20.0, 0.0, 0.0, "P"))
+    lines.append(_pdb_line("HETATM", 3, "PB", "UDP", "A", 901, 40.0, 0.0, 0.0, "P"))
+    rec = _write(tmp_path, "rec.pdb", lines)
+    both = rc.read_atoms(rec, want_hetatm=True, resname="UDP")
+    one = rc.read_atoms(rec, want_hetatm=True, resname="UDP", resseq="900")
+    assert len(both) == 2
+    assert len(one) == 1
+
+
+def test_the_second_alternate_location_is_ignored(tmp_path):
+    """Counting altloc A and B both would double every contact they make."""
+    from dockcheck import receptor as rc
+    rec = _write(tmp_path, "rec.pdb", [
+        _pdb_line("ATOM", 1, "CB", "ARG", "A", 272, 0.0, 0.0, 0.0, "C", altloc="A"),
+        _pdb_line("ATOM", 2, "CB", "ARG", "A", 272, 0.3, 0.0, 0.0, "C", altloc="B"),
+    ])
+    assert len(rc.read_atoms(rec)) == 1
+
+
+def test_hydrogens_are_dropped(tmp_path):
+    from dockcheck import receptor as rc
+    rec = _write(tmp_path, "rec.pdb", [
+        _pdb_line("ATOM", 1, "CA", "ALA", "A", 1, 0.0, 0.0, 0.0, "C"),
+        _pdb_line("ATOM", 2, "HA", "ALA", "A", 1, 1.0, 0.0, 0.0, "H"),
+    ])
+    assert len(rc.read_atoms(rec)) == 1
+
+
+def test_only_the_first_model_is_read(tmp_path):
+    """An NMR ensemble would otherwise pile 20 conformers on top of each
+    other and clash with everything."""
+    from dockcheck import receptor as rc
+    path = tmp_path / "rec.pdb"
+    path.write_text(
+        "MODEL        1\n"
+        + _pdb_line("ATOM", 1, "CA", "ALA", "A", 1, 0.0, 0.0, 0.0, "C")
+        + "ENDMDL\n"
+        + "MODEL        2\n"
+        + _pdb_line("ATOM", 2, "CA", "ALA", "A", 1, 0.5, 0.0, 0.0, "C")
+        + "ENDMDL\n")
+    assert len(rc.read_atoms(str(path))) == 1

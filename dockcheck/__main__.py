@@ -3,6 +3,7 @@
   python -m dockcheck decoys --native ligand.sdf --out decoys/ --n 200
   python -m dockcheck run --receptor r.pdbqt --native ligand.sdf \
       --decoys decoys/ --center 62.3 16.4 34.2 --size 28 --out report/
+  python -m dockcheck receptor --receptor 2b69.pdb --resname UDP --resseq 900
 """
 import argparse
 import csv
@@ -12,6 +13,7 @@ import random
 import sys
 
 from . import decoys as dk
+from . import receptor as rc
 from .control import run_control
 from .report import PASS_PERCENTILE, write_report
 
@@ -97,6 +99,39 @@ def cmd_decoys(a):
     print(f"prepared {len(kept)} decoys, skipped {skipped}")
 
 
+def cmd_receptor(a):
+    try:
+        result = rc.check(a.receptor, a.ligand or a.receptor,
+                          ligand_resname=a.resname, ligand_chain=a.ligand_chain,
+                          ligand_resseq=a.resseq, receptor_chain=a.chain)
+    except ValueError as why:
+        sys.exit(str(why))
+
+    print(f"# dock-check receptor: {result['verdict'].upper()}")
+    print()
+    print(result["summary"])
+    print()
+    if len(result["bound_ligands"]) == 0:
+        print("nothing is bound in this structure apart from solvent, which is "
+              "the condition this check exists for: a site with nothing in it "
+              "had nothing holding it open.")
+    else:
+        bound = ", ".join("%s %s%s (%d atoms)"
+                          % (l["residue"], l["chain"], l["resseq"], l["heavy_atoms"])
+                          for l in result["bound_ligands"][:6])
+        print("bound in this structure:", bound)
+    if a.out is not None:
+        os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
+        with open(a.out, "w") as f:
+            json.dump(result, f, indent=2)
+        print()
+        print("written to", a.out)
+    # A blocked site is the one failure worth a non zero exit, so a
+    # script can stop before spending a day docking into a wall.
+    if result["verdict"] == "backbone":
+        sys.exit(2)
+
+
 def cmd_run(a):
     meta = json.load(open(os.path.join(a.decoys, "decoys.json")))
     decoy_list = [d for d in meta["decoys"] if d["heavy"] is not None]
@@ -115,12 +150,28 @@ def cmd_run(a):
         natives.append({"id": os.path.basename(path).rsplit(".", 1)[0],
                         "pdbqt": pdbqt,
                         "heavy": dk.heavy_atoms_of(path)})
+    site = None
+    if a.site_ligand is not None:
+        try:
+            site = rc.check(a.site_receptor or a.receptor, a.site_ligand,
+                            ligand_resname=a.site_resname,
+                            ligand_resseq=a.site_resseq)
+        except ValueError as why:
+            sys.exit(str(why))
+        print(f"receptor: {site['verdict']}, {site['summary']}")
+        if site["verdict"] == "backbone" and a.force == False:
+            sys.exit("\nStopping. Docking into this receptor measures the "
+                     "protein, not the compounds. Pass --force to run anyway.")
+        print()
+
     print(f"{len(natives)} known binders against {len(decoy_list)} decoys")
     result = run_control(natives, decoy_list, a.receptor, a.center,
                          [a.size] * 3, a.exhaustiveness, a.seed,
                          a.scoring, progress=25)
     if meta.get("salts") is not None:
         result["salts"] = meta["salts"]
+    if site is not None:
+        result["receptor_check"] = site
     v, md = write_report(result, a.out, a.bar)
     print()
     print(md)
@@ -142,6 +193,20 @@ def main(argv=None):
     d.add_argument("--refetch", action="store_true")
     d.set_defaults(func=cmd_decoys)
 
+    rec = sub.add_parser("receptor",
+                         help="check the site is open before docking into it")
+    rec.add_argument("--receptor", required=True, help="receptor PDB")
+    rec.add_argument("--ligand", default=None,
+                     help="PDB holding the bound ligand; defaults to the receptor file")
+    rec.add_argument("--resname", default=None,
+                     help="residue name of the ligand, e.g. UDP")
+    rec.add_argument("--resseq", default=None,
+                     help="residue number, when the ligand appears more than once")
+    rec.add_argument("--ligand-chain", default=None)
+    rec.add_argument("--chain", default=None, help="receptor chain to check")
+    rec.add_argument("--out", default=None, help="write the full result as JSON")
+    rec.set_defaults(func=cmd_receptor)
+
     r = sub.add_parser("run", help="run the control and report a verdict")
     r.add_argument("--receptor", required=True)
     r.add_argument("--native", required=True, action="append",
@@ -154,6 +219,15 @@ def main(argv=None):
     r.add_argument("--seed", type=int, default=42)
     r.add_argument("--scoring", default="vina", choices=["vina", "vinardo"])
     r.add_argument("--bar", type=float, default=PASS_PERCENTILE)
+    r.add_argument("--site-ligand", default=None,
+                   help="PDB of the ligand that marks the site, to check the "
+                        "receptor is open before docking into it")
+    r.add_argument("--site-receptor", default=None,
+                   help="receptor PDB for that check; defaults to --receptor")
+    r.add_argument("--site-resname", default=None)
+    r.add_argument("--site-resseq", default=None)
+    r.add_argument("--force", action="store_true",
+                   help="dock even when the site is blocked by backbone")
     r.set_defaults(func=cmd_run)
 
     a = p.parse_args(argv)
